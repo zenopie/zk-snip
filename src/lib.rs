@@ -19,3 +19,11 @@ pub mod receiver;
 pub mod state;
 mod strings;
 mod transaction_history;
+
+// ZK mode: Note-based privacy (Zcash-style)
+pub mod note;
+pub mod tree;
+pub mod zk;
+
+// ZK operations & bridges (TEE ↔ ZK)
+pub mod operations;

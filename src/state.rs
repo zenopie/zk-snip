@@ -19,6 +19,10 @@ pub const PREFIX_ALLOWED: &[u8] = b"allowed";
 pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
 pub const PREFIX_RECEIVERS: &[u8] = b"receivers";
 
+// Simple balance storage for TEE mode and bridge operations (shield/unshield)
+pub static BALANCES: Keymap<cosmwasm_std::CanonicalAddr, cosmwasm_std::Uint128> =
+    Keymap::new(PREFIX_BALANCES);
+
 // Config
 
 #[derive(Serialize, Debug, Deserialize, Clone, JsonSchema)]
