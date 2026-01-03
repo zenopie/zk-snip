@@ -638,6 +638,22 @@ pub enum QueryMsg {
         query: QueryWithPermit,
     },
 
+    // ZK-SNIP queries (public - no authentication needed)
+    /// Get the current Merkle root and tree size
+    ZkMerkleRoot {},
+    /// Check if a nullifier has been spent
+    ZkNullifierSpent {
+        nullifier: String,
+    },
+    /// Get Merkle path for a commitment at given index
+    ZkMerklePath {
+        leaf_index: u64,
+    },
+    /// Get recent Merkle roots (for proof validation)
+    ZkRecentRoots {
+        count: Option<u32>,
+    },
+
     // for debug purposes only
     #[cfg(feature = "gas_tracking")]
     Dwb {},
@@ -809,6 +825,22 @@ pub enum QueryAnswer {
     // SNIP-24.1
     ListPermitRevocations {
         revocations: Vec<AllRevocation>,
+    },
+
+    // ZK-SNIP query responses
+    ZkMerkleRoot {
+        root: String,
+        tree_size: u64,
+    },
+    ZkNullifierSpent {
+        spent: bool,
+    },
+    ZkMerklePath {
+        path: Vec<String>,
+        leaf_index: u64,
+    },
+    ZkRecentRoots {
+        roots: Vec<String>,
     },
 
     #[cfg(feature = "gas_tracking")]

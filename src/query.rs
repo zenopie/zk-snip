@@ -584,3 +584,94 @@ pub fn query_channel_info(
 // *****************
 // End SNIP-52 query functions
 // *****************
+
+// *****************
+// ZK-SNIP query functions
+// *****************
+
+use crate::tree::merkle::MerkleTree;
+
+const MERKLE_TREE_KEY: &[u8] = b"merkle_tree";
+const NULLIFIER_SET_PREFIX: &[u8] = b"nullifier_";
+const MERKLE_ROOT_HISTORY_PREFIX: &[u8] = b"root_history_";
+const CURRENT_ROOT_INDEX_KEY: &[u8] = b"current_root_index";
+const ROOT_HISTORY_SIZE: u64 = 100;
+
+/// Query the current Merkle root and tree size
+pub fn query_zk_merkle_root(storage: &dyn Storage) -> StdResult<Binary> {
+    let tree = match cosmwasm_std::Storage::get(storage, MERKLE_TREE_KEY) {
+        Some(data) => serde_json::from_slice::<MerkleTree>(&data)
+            .map_err(|e| StdError::generic_err(format!("Failed to parse tree: {}", e)))?,
+        None => MerkleTree::new(),
+    };
+
+    let root = hex::encode(tree.root());
+    let tree_size = tree.size();
+
+    to_binary(&QueryAnswer::ZkMerkleRoot { root, tree_size })
+}
+
+/// Check if a nullifier has been spent
+pub fn query_zk_nullifier_spent(storage: &dyn Storage, nullifier: String) -> StdResult<Binary> {
+    let nullifier_bytes = hex::decode(&nullifier)
+        .map_err(|e| StdError::generic_err(format!("Invalid nullifier hex: {}", e)))?;
+
+    let mut key = NULLIFIER_SET_PREFIX.to_vec();
+    key.extend_from_slice(&nullifier_bytes);
+
+    let spent = cosmwasm_std::Storage::get(storage, &key).is_some();
+
+    to_binary(&QueryAnswer::ZkNullifierSpent { spent })
+}
+
+/// Get Merkle path for a given leaf index
+pub fn query_zk_merkle_path(storage: &dyn Storage, leaf_index: u64) -> StdResult<Binary> {
+    let tree = match cosmwasm_std::Storage::get(storage, MERKLE_TREE_KEY) {
+        Some(data) => serde_json::from_slice::<MerkleTree>(&data)
+            .map_err(|e| StdError::generic_err(format!("Failed to parse tree: {}", e)))?,
+        None => return Err(StdError::generic_err("Merkle tree not initialized")),
+    };
+
+    let path = tree.path(leaf_index)
+        .map_err(|e| StdError::generic_err(format!("Failed to get path: {}", e)))?;
+
+    let path_hex: Vec<String> = path.iter().map(|h| hex::encode(h)).collect();
+
+    to_binary(&QueryAnswer::ZkMerklePath {
+        path: path_hex,
+        leaf_index
+    })
+}
+
+/// Get recent Merkle roots for proof validation
+pub fn query_zk_recent_roots(storage: &dyn Storage, count: Option<u32>) -> StdResult<Binary> {
+    let count = count.unwrap_or(10).min(ROOT_HISTORY_SIZE as u32) as u64;
+
+    // Get current root index
+    let current_index: u64 = match cosmwasm_std::Storage::get(storage, CURRENT_ROOT_INDEX_KEY) {
+        Some(data) => u64::from_le_bytes(data.try_into().unwrap_or([0u8; 8])),
+        None => 0,
+    };
+
+    let mut roots = Vec::new();
+    for i in 0..count {
+        let index = if current_index >= i {
+            current_index - i
+        } else {
+            ROOT_HISTORY_SIZE - (i - current_index)
+        };
+
+        let mut key = MERKLE_ROOT_HISTORY_PREFIX.to_vec();
+        key.extend_from_slice(&index.to_le_bytes());
+
+        if let Some(root_data) = cosmwasm_std::Storage::get(storage, &key) {
+            roots.push(hex::encode(&root_data));
+        }
+    }
+
+    to_binary(&QueryAnswer::ZkRecentRoots { roots })
+}
+
+// *****************
+// End ZK-SNIP query functions
+// *****************

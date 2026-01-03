@@ -517,6 +517,16 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             QueryMsg::ListChannels {} => query::query_list_channels(deps),
             QueryMsg::WithPermit { permit, query } => permit_queries(deps, env, permit, query),
 
+            // ZK-SNIP queries (public)
+            QueryMsg::ZkMerkleRoot {} => query::query_zk_merkle_root(deps.storage),
+            QueryMsg::ZkNullifierSpent { nullifier } => {
+                query::query_zk_nullifier_spent(deps.storage, nullifier)
+            }
+            QueryMsg::ZkMerklePath { leaf_index } => {
+                query::query_zk_merkle_path(deps.storage, leaf_index)
+            }
+            QueryMsg::ZkRecentRoots { count } => query::query_zk_recent_roots(deps.storage, count),
+
             #[cfg(feature = "gas_tracking")]
             QueryMsg::Dwb {} => log_dwb(deps.storage),
 
