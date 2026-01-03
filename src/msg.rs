@@ -320,6 +320,60 @@ pub enum ExecuteMsg {
         #[cfg(feature = "gas_evaporation")]
         gas_target: Option<Uint64>,
     },
+
+    // ZK-SNIP operations (dual-mode privacy)
+    /// ZK Transfer: Shielded transfer using zero-knowledge proofs
+    ZkTransfer {
+        merkle_root: String,
+        nullifiers: [String; 2],
+        commitments: [String; 2],
+        proof: String,
+        encrypted_notes: Vec<crate::operations::zk_transfer::EncryptedNote>,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+        padding: Option<String>,
+    },
+    /// ZK Mint: Create new notes privately
+    ZkMint {
+        commitment: String,
+        amount: Uint128,
+        encrypted_note: Option<String>,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+        padding: Option<String>,
+    },
+    /// ZK Burn: Destroy notes privately
+    ZkBurn {
+        amount: Uint128,
+        merkle_root: String,
+        nullifier: String,
+        change_commitment: String,
+        proof: String,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+        padding: Option<String>,
+    },
+    /// Shield: Convert TEE balance to ZK note
+    Shield {
+        amount: Uint128,
+        commitment: String,
+        encrypted_note: Option<String>,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+        padding: Option<String>,
+    },
+    /// Unshield: Convert ZK note to TEE balance
+    Unshield {
+        recipient: String,
+        amount: Uint128,
+        merkle_root: String,
+        nullifier: String,
+        change_commitment: String,
+        proof: String,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+        padding: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -437,6 +491,23 @@ pub enum ExecuteAnswer {
     DeletePermitRevocation {
         status: ResponseStatus,
     },
+
+    // ZK-SNIP operations
+    ZkTransfer {
+        status: ResponseStatus,
+    },
+    ZkMint {
+        status: ResponseStatus,
+    },
+    ZkBurn {
+        status: ResponseStatus,
+    },
+    Shield {
+        status: ResponseStatus,
+    },
+    Unshield {
+        status: ResponseStatus,
+    },
 }
 
 #[cfg(feature = "gas_evaporation")]
@@ -475,10 +546,15 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::SetContractStatus { gas_target, .. }
             | ExecuteMsg::AddSupportedDenoms { gas_target, .. }
             | ExecuteMsg::RemoveSupportedDenoms { gas_target, .. }
-            | ExecuteMsg::SetNotificationStatus { gas_targe, .. }
+            | ExecuteMsg::SetNotificationStatus { gas_target, .. }
             | ExecuteMsg::RevokePermit { gas_target, .. }
             | ExecuteMsg::RevokeAllPermits { gas_target, .. }
-            | ExecuteMsg::DeletePermitRevocation { gas_target, .. } => match gas_target {
+            | ExecuteMsg::DeletePermitRevocation { gas_target, .. }
+            | ExecuteMsg::ZkTransfer { gas_target, .. }
+            | ExecuteMsg::ZkMint { gas_target, .. }
+            | ExecuteMsg::ZkBurn { gas_target, .. }
+            | ExecuteMsg::Shield { gas_target, .. }
+            | ExecuteMsg::Unshield { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
                     let gas_used = api.check_gas()?;
                     if gas_used < gas_target.u64() {

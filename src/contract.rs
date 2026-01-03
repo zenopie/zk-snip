@@ -365,6 +365,92 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             execute::delete_permit_revocation(deps, info, revocation_id)
         }
 
+        // ZK-SNIP operations (dual-mode privacy)
+        ExecuteMsg::ZkTransfer {
+            merkle_root,
+            nullifiers,
+            commitments,
+            proof,
+            encrypted_notes,
+            ..
+        } => {
+            use crate::operations::zk_transfer::{execute_zk_transfer, ZkTransferMsg};
+            let msg = ZkTransferMsg {
+                merkle_root,
+                nullifiers,
+                commitments,
+                proof,
+                encrypted_notes,
+            };
+            execute_zk_transfer(deps, env, info, msg)
+        }
+        ExecuteMsg::ZkMint {
+            commitment,
+            amount,
+            encrypted_note,
+            ..
+        } => {
+            use crate::operations::zk_mint::{execute_zk_mint, ZkMintMsg};
+            let msg = ZkMintMsg {
+                commitment,
+                amount,
+                encrypted_note,
+            };
+            execute_zk_mint(deps, env, info, msg)
+        }
+        ExecuteMsg::ZkBurn {
+            amount,
+            merkle_root,
+            nullifier,
+            change_commitment,
+            proof,
+            ..
+        } => {
+            use crate::operations::zk_burn::{execute_zk_burn, ZkBurnMsg};
+            let msg = ZkBurnMsg {
+                amount,
+                merkle_root,
+                nullifier,
+                change_commitment,
+                proof,
+            };
+            execute_zk_burn(deps, env, info, msg)
+        }
+        ExecuteMsg::Shield {
+            amount,
+            commitment,
+            encrypted_note,
+            ..
+        } => {
+            use crate::operations::shield::{execute_shield, ShieldMsg};
+            let msg = ShieldMsg {
+                amount,
+                commitment,
+                encrypted_note,
+            };
+            execute_shield(deps, env, info, msg)
+        }
+        ExecuteMsg::Unshield {
+            recipient,
+            amount,
+            merkle_root,
+            nullifier,
+            change_commitment,
+            proof,
+            ..
+        } => {
+            use crate::operations::unshield::{execute_unshield, UnshieldMsg};
+            let msg = UnshieldMsg {
+                recipient,
+                amount,
+                merkle_root,
+                nullifier,
+                change_commitment,
+                proof,
+            };
+            execute_unshield(deps, env, info, msg)
+        }
+
         // Admin functions
         _ => admin_execute(deps, info, msg),
     };
