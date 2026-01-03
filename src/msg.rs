@@ -333,26 +333,6 @@ pub enum ExecuteMsg {
         gas_target: Option<Uint64>,
         padding: Option<String>,
     },
-    /// ZK Mint: Create new notes privately
-    ZkMint {
-        commitment: String,
-        amount: Uint128,
-        encrypted_note: Option<String>,
-        #[cfg(feature = "gas_evaporation")]
-        gas_target: Option<Uint64>,
-        padding: Option<String>,
-    },
-    /// ZK Burn: Destroy notes privately
-    ZkBurn {
-        amount: Uint128,
-        merkle_root: String,
-        nullifier: String,
-        change_commitment: String,
-        proof: String,
-        #[cfg(feature = "gas_evaporation")]
-        gas_target: Option<Uint64>,
-        padding: Option<String>,
-    },
     /// Shield: Convert TEE balance to ZK note
     Shield {
         amount: Uint128,
@@ -370,6 +350,7 @@ pub enum ExecuteMsg {
         nullifier: String,
         change_commitment: String,
         proof: String,
+        encrypted_change_note: Option<String>,
         #[cfg(feature = "gas_evaporation")]
         gas_target: Option<Uint64>,
         padding: Option<String>,
@@ -496,12 +477,6 @@ pub enum ExecuteAnswer {
     ZkTransfer {
         status: ResponseStatus,
     },
-    ZkMint {
-        status: ResponseStatus,
-    },
-    ZkBurn {
-        status: ResponseStatus,
-    },
     Shield {
         status: ResponseStatus,
     },
@@ -551,8 +526,6 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::RevokeAllPermits { gas_target, .. }
             | ExecuteMsg::DeletePermitRevocation { gas_target, .. }
             | ExecuteMsg::ZkTransfer { gas_target, .. }
-            | ExecuteMsg::ZkMint { gas_target, .. }
-            | ExecuteMsg::ZkBurn { gas_target, .. }
             | ExecuteMsg::Shield { gas_target, .. }
             | ExecuteMsg::Unshield { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
@@ -652,6 +625,11 @@ pub enum QueryMsg {
     /// Get recent Merkle roots (for proof validation)
     ZkRecentRoots {
         count: Option<u32>,
+    },
+    /// Get encrypted notes with pagination (for wallet scanning)
+    ZkEncryptedNotes {
+        start_after: Option<u64>,
+        limit: Option<u32>,
     },
 
     // for debug purposes only
@@ -842,11 +820,26 @@ pub enum QueryAnswer {
     ZkRecentRoots {
         roots: Vec<String>,
     },
+    ZkEncryptedNotes {
+        notes: Vec<ZkEncryptedNoteResponse>,
+        total: u64,
+    },
 
     #[cfg(feature = "gas_tracking")]
     Dwb {
         dwb: String,
     },
+}
+
+/// Encrypted note data returned in query response
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct ZkEncryptedNoteResponse {
+    /// Commitment index in Merkle tree
+    pub index: u64,
+    /// Encrypted note ciphertext
+    pub ciphertext: String,
+    /// Block height when created
+    pub block_height: u64,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]

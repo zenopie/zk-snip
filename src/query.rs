@@ -672,6 +672,43 @@ pub fn query_zk_recent_roots(storage: &dyn Storage, count: Option<u32>) -> StdRe
     to_binary(&QueryAnswer::ZkRecentRoots { roots })
 }
 
+/// Get encrypted notes with pagination for wallet scanning
+pub fn query_zk_encrypted_notes(
+    storage: &dyn Storage,
+    start_after: Option<u64>,
+    limit: Option<u32>,
+) -> StdResult<Binary> {
+    use crate::msg::ZkEncryptedNoteResponse;
+    use crate::state::ENCRYPTED_NOTES;
+
+    let limit = limit.unwrap_or(100).min(500) as usize;
+    let start = start_after.unwrap_or(0);
+
+    // Get tree size to know total
+    let tree = match cosmwasm_std::Storage::get(storage, MERKLE_TREE_KEY) {
+        Some(data) => serde_json::from_slice::<MerkleTree>(&data)
+            .map_err(|e| StdError::generic_err(format!("Failed to parse tree: {}", e)))?,
+        None => MerkleTree::new(),
+    };
+    let total = tree.size();
+
+    let mut notes = Vec::new();
+    for idx in start..total {
+        if notes.len() >= limit {
+            break;
+        }
+        if let Some(note_data) = ENCRYPTED_NOTES.get(storage, &idx) {
+            notes.push(ZkEncryptedNoteResponse {
+                index: idx,
+                ciphertext: note_data.ciphertext,
+                block_height: note_data.block_height,
+            });
+        }
+    }
+
+    to_binary(&QueryAnswer::ZkEncryptedNotes { notes, total })
+}
+
 // *****************
 // End ZK-SNIP query functions
 // *****************

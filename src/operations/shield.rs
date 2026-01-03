@@ -34,7 +34,7 @@ const CURRENT_ROOT_INDEX_KEY: &[u8] = b"current_root_index";
 /// 4. User can now spend the note privately using ZK proofs
 pub fn execute_shield(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: ShieldMsg,
 ) -> StdResult<Response> {
@@ -72,15 +72,18 @@ pub fn execute_shield(
     // Save updated tree
     save_merkle_tree(deps.storage, &tree)?;
 
-    let resp = Response::new()
-        .add_attribute("action", "shield")
-        .add_attribute("from", info.sender.as_str())
-        .add_attribute("amount", msg.amount.to_string())
-        .add_attribute("commitment_index", index.to_string())
-        .add_attribute("new_root", hex::encode(new_root))
-        .add_attribute("remaining_tee_balance", balance.to_string());
+    // Store encrypted note for wallet scanning (if provided)
+    if let Some(ref enc_note) = msg.encrypted_note {
+        use crate::state::{ENCRYPTED_NOTES, EncryptedNoteData};
+        let note_data = EncryptedNoteData {
+            ciphertext: enc_note.clone(),
+            block_height: env.block.height,
+        };
+        ENCRYPTED_NOTES.insert(deps.storage, &index, &note_data)?;
+    }
 
-    Ok(resp)
+    // Minimal response - no ZK-specific attributes to preserve privacy
+    Ok(Response::new())
 }
 
 /// Load Merkle tree from storage

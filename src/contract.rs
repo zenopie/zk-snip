@@ -33,9 +33,10 @@ use crate::notifications::{
     SpentNotification,
 };
 use crate::state::{
-    Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET_RELAXED,
+    Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, GROTH16_VK, INTERNAL_SECRET_RELAXED,
     INTERNAL_SECRET_SENSITIVE, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY,
 };
+use crate::zk::groth16::perform_trusted_setup;
 use crate::strings::TRANSFER_HISTORY_UNSUPPORTED_MSG;
 
 /// We make sure that responses from `handle` are padded to a multiple of this size.
@@ -188,6 +189,21 @@ pub fn instantiate(
         32,
     )?;
     ViewingKey::set_seed(deps.storage, &vk_seed);
+
+    // ZK-SNIP: Perform Groth16 trusted setup using env.block.random
+    // The seed is derived from the secret VRF output, ensuring:
+    // - Unique per contract (different env.block.random each instantiation)
+    // - Unknown to anyone (VRF computed inside SGX enclave)
+    // - "Toxic waste" (proving key randomness) is never stored
+    let zk_seed = hkdf_sha_256(
+        &salt,
+        rng_seed.0.as_slice(),
+        "groth16_trusted_setup".as_bytes(),
+        32,
+    )?;
+    let serialized_vk = perform_trusted_setup(&zk_seed)
+        .map_err(|e| StdError::generic_err(format!("Trusted setup failed: {}", e)))?;
+    GROTH16_VK.save(deps.storage, &serialized_vk.data)?;
 
     Ok(Response::default())
 }
@@ -384,38 +400,6 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             };
             execute_zk_transfer(deps, env, info, msg)
         }
-        ExecuteMsg::ZkMint {
-            commitment,
-            amount,
-            encrypted_note,
-            ..
-        } => {
-            use crate::operations::zk_mint::{execute_zk_mint, ZkMintMsg};
-            let msg = ZkMintMsg {
-                commitment,
-                amount,
-                encrypted_note,
-            };
-            execute_zk_mint(deps, env, info, msg)
-        }
-        ExecuteMsg::ZkBurn {
-            amount,
-            merkle_root,
-            nullifier,
-            change_commitment,
-            proof,
-            ..
-        } => {
-            use crate::operations::zk_burn::{execute_zk_burn, ZkBurnMsg};
-            let msg = ZkBurnMsg {
-                amount,
-                merkle_root,
-                nullifier,
-                change_commitment,
-                proof,
-            };
-            execute_zk_burn(deps, env, info, msg)
-        }
         ExecuteMsg::Shield {
             amount,
             commitment,
@@ -437,6 +421,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             nullifier,
             change_commitment,
             proof,
+            encrypted_change_note,
             ..
         } => {
             use crate::operations::unshield::{execute_unshield, UnshieldMsg};
@@ -447,6 +432,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
                 nullifier,
                 change_commitment,
                 proof,
+                encrypted_change_note,
             };
             execute_unshield(deps, env, info, msg)
         }
@@ -526,6 +512,9 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
                 query::query_zk_merkle_path(deps.storage, leaf_index)
             }
             QueryMsg::ZkRecentRoots { count } => query::query_zk_recent_roots(deps.storage, count),
+            QueryMsg::ZkEncryptedNotes { start_after, limit } => {
+                query::query_zk_encrypted_notes(deps.storage, start_after, limit)
+            }
 
             #[cfg(feature = "gas_tracking")]
             QueryMsg::Dwb {} => log_dwb(deps.storage),

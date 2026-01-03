@@ -237,3 +237,24 @@ pub static CHANNELS: Keyset<String> = Keyset::new(b"channel-ids");
 
 /// SNIP-52 status
 pub static NOTIFICATIONS_ENABLED: Item<bool> = Item::new(b"notify-status");
+
+// ZK-SNIP: Encrypted notes storage (indexed by commitment index)
+pub const PREFIX_ENCRYPTED_NOTES: &[u8] = b"enc_notes";
+
+/// Encrypted note data for wallet scanning
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct EncryptedNoteData {
+    /// The encrypted note ciphertext (only recipient can decrypt)
+    pub ciphertext: String,
+    /// Block height when this note was created
+    pub block_height: u64,
+}
+
+/// Storage for encrypted notes, indexed by commitment index in Merkle tree
+pub static ENCRYPTED_NOTES: Keymap<u64, EncryptedNoteData> = Keymap::new(PREFIX_ENCRYPTED_NOTES);
+
+// ZK-SNIP: Groth16 verification key storage
+pub const KEY_GROTH16_VK: &[u8] = b"groth16_vk";
+
+/// Groth16 verification key (set during contract instantiation via trusted setup)
+pub static GROTH16_VK: Item<Vec<u8>> = Item::new(KEY_GROTH16_VK);

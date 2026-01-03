@@ -24,12 +24,13 @@ Users can hold balances in both modes and transfer between them.
 
 ### ZK Mode (Cryptographic Privacy)
 
-- **Privacy Model**: Zero-knowledge proofs (Bulletproofs)
+- **Privacy Model**: Zero-knowledge proofs (Groth16 ZK-SNARKs)
 - **State**: Note commitments in Merkle tree
 - **Gas Cost**: ~600-700k per transfer (proof verification)
 - **Balance Queries**: Must scan commitments to decrypt notes
 - **Transaction Graph**: Completely hidden
 - **Privacy Guarantee**: Survives TEE compromise
+- **Trusted Setup**: Automatic, using Secret Network's VRF (`env.block.random`)
 
 ## Key Features
 
@@ -42,8 +43,9 @@ Users can hold balances in both modes and transfer between them.
 ### ZK Mode
 - ✅ Zcash-style note-based privacy
 - ✅ Cryptographic hiding of amounts and transaction graph
-- ✅ No trusted setup (uses Bulletproofs)
+- ✅ Automatic trusted setup via Secret Network's VRF (Groth16)
 - ✅ Privacy doesn't depend on trusting hardware
+- ✅ "Toxic waste" never exposed (seed derived inside SGX, then discarded)
 
 ### Bridge Operations
 - ✅ Shield: TEE → ZK (convert balance to private note)
@@ -68,14 +70,11 @@ src/
 │   └── frontier.rs      # Rightmost path storage
 │
 ├── zk/                   # ZK mode: Cryptography
-│   ├── bulletproofs.rs  # Proof verifier (no trusted setup)
-│   ├── crypto.rs        # Pedersen commitments, hashing
-│   └── circuits.rs      # Transfer circuit constraints
+│   ├── groth16.rs       # Groth16 ZK-SNARK verifier & circuit
+│   └── crypto.rs        # Pedersen commitments, hashing
 │
 └── operations/           # ZK operations & bridges
     ├── zk_transfer.rs   # ZK → ZK (spend 2 notes, create 2 notes)
-    ├── zk_mint.rs       # ∅ → ZK (create note, increase supply)
-    ├── zk_burn.rs       # ZK → ∅ (destroy note, decrease supply)
     ├── shield.rs        # TEE → ZK (balance to note)
     └── unshield.rs      # ZK → TEE (note to balance)
 ```
@@ -113,7 +112,7 @@ src/
     "merkle_root": "abc123...",
     "nullifiers": ["def456...", "ghi789..."],
     "commitments": ["jkl012...", "mno345..."],
-    "proof": "base64_encoded_bulletproof"
+    "proof": "base64_encoded_groth16_proof"
   }
 }
 ```
@@ -121,37 +120,6 @@ src/
 - Spends 2 old notes (via nullifiers)
 - Creates 2 new notes (via commitments)
 - Proves everything is valid without revealing amounts
-
-**ZK Mint** (admin only)
-```json
-{
-  "zk_mint": {
-    "commitment": "abc123...",
-    "amount": "1000"
-  }
-}
-```
-
-- Creates new note from nothing (increases total supply)
-- Only admin can mint
-- No proof required (admin authority)
-
-**ZK Burn** (anyone with note)
-```json
-{
-  "zk_burn": {
-    "amount": "600",
-    "merkle_root": "def456...",
-    "nullifier": "ghi789...",
-    "change_commitment": "jkl012...",
-    "proof": "base64_encoded_bulletproof"
-  }
-}
-```
-
-- Destroys note (decreases total supply)
-- Requires proof of note ownership
-- Creates change note if needed
 
 ### Bridge Operations
 
@@ -178,7 +146,7 @@ src/
     "merkle_root": "def456...",
     "nullifier": "ghi789...",
     "change_commitment": "jkl012...",
-    "proof": "base64_encoded_bulletproof"
+    "proof": "base64_encoded_groth16_proof"
   }
 }
 ```
@@ -197,7 +165,7 @@ src/
 | Balance Queries | Fast (viewing keys) | Slow (scan blockchain) |
 | Gas Cost | ~100-200k | ~600-700k |
 | TEE Compromise | ⚠️ Privacy lost | ✅ Privacy maintained |
-| Setup Ceremony | None | None (Bulletproofs) |
+| Setup Ceremony | None | Automatic (via VRF) |
 
 ## Use Cases
 
@@ -223,19 +191,19 @@ src/
 ✅ **Completed:**
 - Note structures and key derivation
 - Merkle tree with frontier optimization
-- Bulletproofs verifier infrastructure
+- Groth16 ZK-SNARK verifier (bellman + BLS12-381)
+- Automatic trusted setup via `env.block.random`
 - Crypto primitives (Pedersen, BLAKE2s)
-- Transfer circuit constraints
+- SpendCircuit for proof verification
 - ZK transfer operation
 - Shield/unshield bridge operations
+- Utility functions (nullifier derivation, commitment computation)
+- Query endpoints for commitments/nullifiers/merkle paths
+- SNIP-20 compatibility (ZK operations integrated into contract)
 
-⏳ **TODO:**
-- Integrate actual Bulletproofs library (dalek-cryptography)
-- Add query endpoints for commitments
+⏳ **Client-side TODO:**
 - Client library for proof generation
 - Balance scanning utilities
-- SNIP-20 compatibility layer in contract.rs
-- Viewing key support for ZK mode (optional note index)
 
 ## Security Model
 
@@ -264,9 +232,7 @@ src/
 | TEE Mint | ~50-100k | Admin only |
 | TEE Burn | ~50-100k | Balance check |
 | **ZK Mode** | | |
-| ZK Transfer | ~600-700k | Bulletproof verification |
-| ZK Mint | ~150-250k | Tree insert only (no proof) |
-| ZK Burn | ~650-750k | Proof verification |
+| ZK Transfer | ~600-700k | Groth16 proof verification |
 | **Bridge** | | |
 | Shield | ~150-250k | Balance check + tree insert |
 | Unshield | ~650-750k | Proof verification + balance update |
@@ -315,20 +281,25 @@ secretcli tx compute store contract.wasm.gz --from mykey
 - Recipients scan to find their notes
 
 ### Zero-Knowledge Proofs
-- **System**: Bulletproofs (no trusted setup)
-- **Proves**:
-  1. Range proofs (values in [0, 2^64))
-  2. Balance conservation (inputs = outputs)
-  3. Merkle authentication (notes exist in tree)
-  4. Nullifier derivation (correct spending)
-  5. Commitment consistency (valid new notes)
+- **System**: Groth16 ZK-SNARKs (BLS12-381 curve)
+- **Library**: bellman (from Zcash)
+- **Trusted Setup**: Automatic via `env.block.random`
+  - Contract instantiation generates VK using Secret Network's VRF
+  - Seed is unique per contract, computed inside SGX enclave
+  - Proving key randomness ("toxic waste") is discarded after setup
+- **SpendCircuit proves**:
+  1. Knowledge of note secret (spending authority)
+  2. Nullifier correctly derived from secret + position
+  3. Commitment correctly formed
+  4. Merkle path verification (note exists in tree)
 
 ## References
 
 - [SNIP-20 Reference Implementation](https://github.com/scrtlabs/snip20-reference-impl)
 - [Zcash Sapling Protocol](https://github.com/zcash/zips/blob/master/protocol/sapling.pdf)
-- [Bulletproofs Paper](https://eprint.iacr.org/2017/1066.pdf)
+- [Groth16 Paper](https://eprint.iacr.org/2016/260.pdf)
 - [Secret Network Docs](https://docs.scrt.network/)
+- [bellman Library](https://github.com/zkcrypto/bellman)
 
 ## License
 

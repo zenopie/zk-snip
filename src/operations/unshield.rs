@@ -2,8 +2,9 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uin
 use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
 
-use crate::zk::bulletproofs::{BulletproofProof, BulletproofVerifier, PublicInputs};
-use crate::state::BALANCES;
+use crate::state::{BALANCES, ENCRYPTED_NOTES, EncryptedNoteData, GROTH16_VK};
+use crate::tree::merkle::MerkleTree;
+use crate::zk::groth16::{SerializedVK, verifier_from_serialized};
 
 /// Message for unshielding ZK note into TEE balance
 ///
@@ -29,8 +30,13 @@ pub struct UnshieldMsg {
     /// Zero-knowledge proof (base64-encoded)
     /// Proves: ownership of note, correct nullifier, correct change
     pub proof: String,
+
+    /// Optional encrypted change note for sender's wallet scanning
+    #[serde(default)]
+    pub encrypted_change_note: Option<String>,
 }
 
+const MERKLE_TREE_KEY: &[u8] = b"merkle_tree";
 const NULLIFIER_SET_PREFIX: &[u8] = b"nullifier_";
 const MERKLE_ROOT_HISTORY_PREFIX: &[u8] = b"root_history_";
 const CURRENT_ROOT_INDEX_KEY: &[u8] = b"current_root_index";
@@ -47,7 +53,7 @@ const ROOT_HISTORY_SIZE: u64 = 100;
 /// 6. Insert change commitment into tree
 pub fn execute_unshield(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     _info: MessageInfo,
     msg: UnshieldMsg,
 ) -> StdResult<Response> {
@@ -60,7 +66,6 @@ pub fn execute_unshield(
     use base64::{Engine as _, engine::general_purpose};
     let proof_bytes = general_purpose::STANDARD.decode(&msg.proof)
         .map_err(|e| StdError::generic_err(format!("Invalid proof encoding: {}", e)))?;
-    let proof = BulletproofProof::from_bytes(proof_bytes);
 
     // Step 1: Verify merkle root is recent
     verify_merkle_root_recent(deps.storage, &merkle_root)?;
@@ -68,18 +73,17 @@ pub fn execute_unshield(
     // Step 2: Check nullifier not spent
     verify_nullifier_unspent(deps.storage, &nullifier)?;
 
-    // Step 3: Verify zero-knowledge proof
+    // Step 3: Verify zero-knowledge proof using Groth16
     // Public inputs: merkle_root, nullifier, change_commitment
     // Proof shows: I own a note, here's its nullifier, here's change commitment
-    let public_inputs = PublicInputs::new(
-        merkle_root,
-        [nullifier, [0u8; 32]], // Only one nullifier for unshield
-        [change_commitment, [0u8; 32]], // Change commitment + dummy
-    );
+    let vk_bytes = GROTH16_VK.load(deps.storage)
+        .map_err(|_| StdError::generic_err("Verification key not initialized - contract not properly instantiated"))?;
+    let serialized_vk = SerializedVK { data: vk_bytes };
+    let verifier = verifier_from_serialized(&serialized_vk)
+        .map_err(|e| StdError::generic_err(format!("Failed to load verifier: {}", e)))?;
 
-    let verifier = BulletproofVerifier::new();
     verifier
-        .verify(&proof, &public_inputs)
+        .verify_bytes(&proof_bytes, &merkle_root, &nullifier, &change_commitment)
         .map_err(|e| StdError::generic_err(format!("Proof verification failed: {}", e)))?;
 
     // Step 4: Mark nullifier as spent
@@ -95,17 +99,32 @@ pub fn execute_unshield(
     BALANCES.insert(deps.storage, &recipient_raw, &balance)?;
 
     // Step 6: Insert change commitment into tree (if non-zero)
-    // TODO: Add tree insertion for change commitment
-    // For now, we skip this as it requires tree access
+    let zero_commitment = [0u8; 32];
+    if change_commitment != zero_commitment {
+        let mut tree = load_merkle_tree(deps.storage)?;
+        let index = tree
+            .insert(change_commitment)
+            .map_err(|e| StdError::generic_err(e))?;
 
-    let resp = Response::new()
-        .add_attribute("action", "unshield")
-        .add_attribute("recipient", msg.recipient)
-        .add_attribute("amount", msg.amount.to_string())
-        .add_attribute("nullifier", hex::encode(nullifier))
-        .add_attribute("new_tee_balance", balance.to_string());
+        // Update root history
+        let new_root = tree.root();
+        update_root_history(deps.storage, new_root)?;
 
-    Ok(resp)
+        // Save updated tree
+        save_merkle_tree(deps.storage, &tree)?;
+
+        // Store encrypted change note if provided
+        if let Some(ref enc_note) = msg.encrypted_change_note {
+            let note_data = EncryptedNoteData {
+                ciphertext: enc_note.clone(),
+                block_height: env.block.height,
+            };
+            ENCRYPTED_NOTES.insert(deps.storage, &index, &note_data)?;
+        }
+    }
+
+    // Minimal response - no ZK-specific attributes to preserve privacy
+    Ok(Response::new())
 }
 
 /// Verify that the merkle root is in recent history
@@ -189,6 +208,39 @@ fn parse_hex_32(hex: &str) -> StdResult<[u8; 32]> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(arr)
+}
+
+/// Load Merkle tree from storage
+fn load_merkle_tree(storage: &dyn Storage) -> StdResult<MerkleTree> {
+    storage
+        .get(MERKLE_TREE_KEY)
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| StdError::generic_err(format!("Failed to deserialize tree: {}", e)))
+        })
+        .unwrap_or_else(|| Ok(MerkleTree::new()))
+}
+
+/// Save Merkle tree to storage
+fn save_merkle_tree(storage: &mut dyn Storage, tree: &MerkleTree) -> StdResult<()> {
+    let bytes = serde_json::to_vec(tree)
+        .map_err(|e| StdError::generic_err(format!("Failed to serialize tree: {}", e)))?;
+    storage.set(MERKLE_TREE_KEY, &bytes);
+    Ok(())
+}
+
+/// Update root history with new root
+fn update_root_history(storage: &mut dyn Storage, root: [u8; 32]) -> StdResult<()> {
+    let mut index = load_current_root_index(storage)?;
+    index += 1;
+
+    let key = root_history_key(index);
+    storage.set(&key, &root);
+
+    // Update current index
+    storage.set(CURRENT_ROOT_INDEX_KEY, &index.to_le_bytes());
+
+    Ok(())
 }
 
 #[cfg(test)]
